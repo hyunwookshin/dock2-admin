@@ -1,3 +1,4 @@
+// AuthRepo.kt  (replace startLogin + small changes)
 package com.hyunwookshin.dock2
 
 import android.app.Activity
@@ -7,23 +8,35 @@ import android.util.Log
 import net.openid.appauth.*
 
 class AuthRepo {
-    private var authService: AuthorizationService? = null
     @Volatile private var idToken: String? = null
     @Volatile private var refreshToken: String? = null
 
     val hasToken get() = !idToken.isNullOrBlank()
     fun token() = idToken
 
-    fun startLogin(activity: Activity) {
+    fun logout() {
+        idToken = null
+        refreshToken = null
+        Prefs.forceReauth = true
+    }
+
+    fun startLogin(
+        activity: Activity,
+        onLaunched: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val domain = "us-east-2yx5yfkshr.auth.us-east-2.amazoncognito.com"
+
+        // Hosted UI endpoints
         val cfg = AuthorizationServiceConfiguration(
-            Uri.parse("https://${Oidc.DOMAIN}/oauth2/authorize"),
-            Uri.parse("https://${Oidc.DOMAIN}/oauth2/token"),
+            Uri.parse("https://$domain/login"),            // use /login
+            Uri.parse("https://$domain/oauth2/token"),
             null,
-            Uri.parse("https://${Oidc.DOMAIN}/logout")
+            Uri.parse("https://$domain/logout")
         )
 
-        authService?.dispose()
-        authService = AuthorizationService(activity)
+        // Force re-auth every time without using 'prompt=login'
+        val extras = mapOf("max_age" to "0")               // <- key change
 
         val req = AuthorizationRequest.Builder(
             cfg,
@@ -31,66 +44,45 @@ class AuthRepo {
             ResponseTypeValues.CODE,
             Oidc.REDIRECT_URI
         )
-            .setScopes(*Oidc.SCOPES.toTypedArray())
+            .setScopes("openid", "email")
+            // .setPrompt("login")                         // 🔕 remove this
+            .setAdditionalParameters(extras)               // ✅ use max_age=0 instead
             .build()
 
-        val intent = authService!!.getAuthorizationRequestIntent(req)
+        android.util.Log.d("Auth", "Authorize URL: ${req.toUri()}")
 
-        // ➊ Log what we’re doing
-        android.util.Log.d("Auth", "Launching Hosted UI: ${req.toUri()}")
-
-        // ➋ If a browser isn’t available, tell the user instead of hanging
-        val canHandle = intent.resolveActivity(activity.packageManager) != null
-        if (!canHandle) {
-            android.widget.Toast.makeText(
-                activity,
-                "No browser found to open sign-in. Install or enable Chrome/Firefox.",
-                android.widget.Toast.LENGTH_LONG
-            ).show()
-            return
+        val svc = AuthorizationService(activity)
+        val intent = svc.getAuthorizationRequestIntent(req)
+        if (intent.resolveActivity(activity.packageManager) == null) {
+            onError("No browser found to handle sign-in."); return
         }
-
-        // ➌ Launch (pairs with onActivityResult in LoginActivity)
+        onLaunched()
         activity.startActivityForResult(intent, 1001)
     }
 
-
-    fun handleAuthResponse(data: Intent?, onDone: (Boolean) -> Unit) {
+    fun handleAuthResponse(activity: Activity, data: Intent?, onDone: (Boolean) -> Unit) {
         val resp = AuthorizationResponse.fromIntent(data ?: return onDone(false))
         val ex = AuthorizationException.fromIntent(data)
+        Log.d("Auth", "Auth resp code=${resp?.authorizationCode} state=${resp?.state}")
 
-        android.util.Log.d("Auth", "Auth resp code=${resp?.authorizationCode} state=${resp?.state}")
-        if (ex != null) {
-            android.util.Log.e("Auth", "Auth error: code=${ex.code} type=${ex.type} error=${ex.errorDescription}")
-            return onDone(false)
-        }
-        if (resp == null) {
-            android.util.Log.e("Auth", "Auth resp is null")
+        if (ex != null || resp == null) {
+            Log.e("Auth", "Auth error: ${ex?.errorDescription ?: ex?.message}")
             return onDone(false)
         }
 
-        val svc = authService ?: run {
-            android.util.Log.e("Auth", "AuthService was null during token exchange")
-            return onDone(false)
-        }
-
-        // Exchange code for tokens
-        val tokenReq = resp.createTokenExchangeRequest()
-        android.util.Log.d("Auth", "Exchanging code for tokens…")
-        svc.performTokenRequest(tokenReq) { tokenResp, tokEx ->
-            if (tokEx != null) {
-                android.util.Log.e("Auth", "Token exchange failed: ${tokEx.errorDescription ?: tokEx.error}")
-                return@performTokenRequest onDone(false)
-            }
-            if (tokenResp == null) {
-                android.util.Log.e("Auth", "Token response is null")
+        val svc = AuthorizationService(activity)
+        Log.d("Auth", "Exchanging code for tokens…")
+        svc.performTokenRequest(resp.createTokenExchangeRequest()) { tokenResp, tokEx ->
+            svc.dispose()
+            if (tokEx != null || tokenResp == null) {
+                Log.e("Auth", "Token exchange failed: ${tokEx?.errorDescription ?: tokEx?.error}")
                 return@performTokenRequest onDone(false)
             }
             idToken = tokenResp.idToken
             refreshToken = tokenResp.refreshToken
-            android.util.Log.d("Auth", "Token OK. ID token present=${!idToken.isNullOrBlank()} refresh=${!refreshToken.isNullOrBlank()}")
+            Prefs.forceReauth = false
+            Log.d("Auth", "Token OK. id=${!idToken.isNullOrBlank()} refresh=${!refreshToken.isNullOrBlank()}")
             onDone(!idToken.isNullOrBlank())
         }
     }
-
 }

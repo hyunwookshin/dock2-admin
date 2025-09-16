@@ -1,63 +1,70 @@
+// LoginActivity.kt  (replace the whole file with this)
 package com.hyunwookshin.dock2
 
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.view.Gravity
-import android.widget.FrameLayout
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 
 class LoginActivity : ComponentActivity() {
+
+    // Activity-owned state so we can flip it from callbacks and onActivityResult
+    private val inProgress = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Small visible placeholder so it's never blank
-        val tv = TextView(this).apply {
-            text = "Opening sign-in…"
-            textSize = 18f
-            gravity = Gravity.CENTER
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        }
-        setContentView(FrameLayout(this).apply { addView(tv) })
-
-        // Already logged in? Go straight to app.
+        // If already signed in, go straight to app
         if (App.auth.hasToken) {
             startActivity(Intent(this, MainActivity::class.java))
             finish()
             return
         }
 
-        // Ensure there is a real browser available (prevents self-loop)
-        if (!hasHttpHandler()) {
-            Toast.makeText(this, "No browser found. Please install or enable Chrome/Firefox.", Toast.LENGTH_LONG).show()
-            runCatching {
-                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.android.chrome")))
+        setContent {
+            MaterialTheme {
+                LoginScreen(
+                    inProgress = inProgress.value,
+                    onClick = {
+                        if (!hasHttpHandler()) {
+                            Toast.makeText(this, "No browser found. Install Chrome/Firefox.", Toast.LENGTH_LONG).show()
+                            return@LoginScreen
+                        }
+                        // Do not flip spinner yet—only after we know launch will occur
+                        App.auth.startLogin(
+                            activity = this,
+                            onLaunched = { inProgress.value = true },              // ✅ only spin when we actually launch
+                            onError = { msg ->
+                                inProgress.value = false                           // ✅ reset on any failure
+                                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                            }
+                        )
+                    }
+                )
             }
-            return
         }
-
-        android.util.Log.d("Auth", "LoginActivity: starting Hosted UI")
-        // Start the Hosted UI through AuthRepo (so the same AuthorizationService is used later)
-        App.auth.startLogin(this)
-
     }
 
-    // Classic onActivityResult pairs with startActivityForResult in AuthRepo
+    // Back from Hosted UI
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == 1001) {
-            App.auth.handleAuthResponse(data) { ok ->
+            inProgress.value = false  // ✅ we’re back; stop spinner regardless
+
+            App.auth.handleAuthResponse(this, data) { ok ->
                 if (ok) {
                     startActivity(Intent(this, MainActivity::class.java))
                     finish()
                 } else {
-                    Toast.makeText(this, "Sign-in failed. Check browser & callback URL.", Toast.LENGTH_LONG).show()
-                    // Avoid immediate loop; let the user relaunch the app or tap a "Sign in" button if you add one.
+                    Toast.makeText(this, "Sign-in failed. Please try again.", Toast.LENGTH_LONG).show()
                 }
             }
             return
@@ -69,4 +76,30 @@ class LoginActivity : ComponentActivity() {
         val test = Intent(Intent.ACTION_VIEW, Uri.parse("https://example.com"))
         return packageManager.resolveActivity(test, 0) != null
     }
+
+}
+
+@Composable
+private fun LoginScreen(inProgress: Boolean, onClick: () -> Unit) {
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(text = "dock2", style = MaterialTheme.typography.headlineLarge)
+            Spacer(Modifier.height(16.dp))
+            if (inProgress) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(8.dp))
+                Text("Opening sign-in…")
+            } else {
+                Button(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+                    Text("Sign in")
+                }
+            }
+        }
+    }
+
+
 }
