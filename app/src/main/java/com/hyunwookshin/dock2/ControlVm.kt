@@ -9,6 +9,24 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import okhttp3.ResponseBody
 import retrofit2.Response
+import org.json.JSONObject
+
+private fun pretty(json: String): String = try {
+    val state = JSONObject(json).optString("state")
+    if (state.isBlank()) json else when (state.lowercase()) {
+        "pending"         -> "Starting"
+        "running"         -> "Running"
+        "stopping"        -> "Stopping"
+        "stopped"         -> "Stopped"
+        "shutting-down"   -> "Shutting down"
+        "terminated"      -> "Terminated"
+        "rebooting"       -> "Rebooting"
+        else              -> state.replaceFirstChar { it.titlecase() }
+    }
+} catch (_: Exception) {
+    // If it isn't the expected JSON, just show whatever came back
+    json
+}
 
 class ControlVm(
     private val service: Ec2Service = Net.api { App.auth.token() } // uses your ID token
@@ -30,7 +48,7 @@ class ControlVm(
             runCatching { call(action, instanceId) }
                 .onSuccess { r ->
                     _result.value = if (r.isSuccessful) {
-                        r.body()?.string().orEmpty()
+                        pretty(r.body()?.string().orEmpty())
                     } else {
                         "HTTP ${r.code()} ${r.errorBody()?.string().orEmpty()}"
                     }

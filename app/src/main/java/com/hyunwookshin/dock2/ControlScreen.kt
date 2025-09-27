@@ -32,7 +32,7 @@ fun ControlScreen(
                 modifier = Modifier.fillMaxWidth()
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { vm.start(instanceId) }) { Text("Start") }
+                Button(onClick = { vm.start(instanceId) }) { Text("►") }
                 Button(onClick = { vm.stop(instanceId)  }) { Text("Stop") }
                 Button(onClick = { vm.status(instanceId)}) { Text("Status") }
             }
